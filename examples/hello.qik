@@ -1,0 +1,3 @@
+set 0 "Hello there.\n"
+call print 0
+halti 0
