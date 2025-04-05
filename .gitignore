@@ -9,3 +9,7 @@ __pycache__/
 bin/
 obj/
 .zig-cache/
+
+# built executable
+qik
+qik.o
