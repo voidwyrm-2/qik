@@ -6,7 +6,7 @@ const variableCount = 256;
 
 const instructionSize = 3;
 
-pub const QikError = error{ MalformedBytecode, InvalidOpcode, NullRegisterAccess, FunctionNotFound, NotEnoughArguments };
+pub const QikError = error{ MalformedBytecode, InvalidOpcode, ReservedOpcode, NullRegisterAccess, FunctionNotFound, NotEnoughArguments };
 
 const Opcode = struct {
     op: u8,
@@ -180,6 +180,7 @@ pub const VM = struct {
                     self.pc += 3 + nameLength + argCount;
                 },
                 3 => { // callext
+                    try self.errf(QikError.ReservedOpcode, "opcode {d} is reversed and should not be used", .{opcode.op});
                     self.advance();
                 },
                 4 => { // alloc
