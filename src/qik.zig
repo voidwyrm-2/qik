@@ -4,30 +4,26 @@ const io = std.io;
 
 const variableCount = 256;
 
-const instructionSize = 3;
+const standardInstructionSize = 3;
 
 pub const QikError = error{ MalformedBytecode, InvalidOpcode, ReservedOpcode, NullRegisterAccess, FunctionNotFound, NotEnoughArguments };
 
-const Opcode = struct {
-    op: u8,
+const Opcode = enum(u8) { Nop, Halt, Call, Callext, Alloc, Free, Jmp, Set, _ };
+
+const InstructionOpcode = struct {
+    op: Opcode,
     imm: bool,
     ptr: bool,
-    fn init(byte: u8) Opcode {
-        return .{ .op = byte >> 2, .imm = byte & 0b10 == 2, .ptr = byte & 0b1 == 1 };
+    fn init(byte: u8) InstructionOpcode {
+        return .{ .op = @enumFromInt(byte >> 2), .imm = byte & 0b10 == 2, .ptr = byte & 0b1 == 1 };
     }
 };
 
 const QikFunc = *const fn (*VM, [][]u8) anyerror!void;
 
-fn expectArgs(vm: *VM, expected: usize, args: *const [][]u8) anyerror!void {
-    if (args.len < expected) {
-        try vm.errf(QikError.NotEnoughArguments, "expected {d} arguments but only {d} were given", .{ expected, args.len });
-    }
-}
-
 const qikFuncs = struct {
     fn putc(vm: *VM, args: [][]u8) anyerror!void {
-        try expectArgs(vm, 1, &args);
+        try vm.expectArgs(1, &args);
 
         var bw = io.bufferedWriter(vm.out.writer());
         const outwtr = bw.writer();
@@ -36,13 +32,21 @@ const qikFuncs = struct {
         try bw.flush();
     }
     fn print(vm: *VM, args: [][]u8) anyerror!void {
-        try expectArgs(vm, 1, &args);
+        try vm.expectArgs(1, &args);
 
         var bw = io.bufferedWriter(vm.out.writer());
         const outwtr = bw.writer();
 
         try outwtr.print("{s}", .{args[0]});
         try bw.flush();
+    }
+    fn readline(vm: *VM, args: [][]u8) anyerror {
+        try vm.expectArgs(1, args);
+
+        var bw = io.bufferedReader(vm.in.reader());
+        const inrdr = bw.reader();
+
+        try inrdr.readUntilDelimiter(args[0], '\n');
     }
 };
 
@@ -85,8 +89,18 @@ pub const VM = struct {
             try self.errf(QikError.NullRegisterAccess, "attempt to access null register {d}", .{ind});
         }
     }
+    fn expectArgs(vm: *VM, expected: usize, args: *const [][]u8) anyerror!void {
+        if (args.len < expected) {
+            try vm.errf(QikError.NotEnoughArguments, "expected {d} arguments but only {d} were given", .{ expected, args.len });
+        }
+    }
     fn advance(self: *VM) void {
-        self.pc += instructionSize;
+        self.pc += standardInstructionSize;
+    }
+    pub fn loadArgs(self: *VM, args: [][]u8) !u8 {
+        for (args, 0..) |a, i| {
+            self.vars[i] = a;
+        }
     }
     pub fn rget(self: *VM, ind: usize) ![]u8 {
         try self.checkNull(ind);
@@ -138,11 +152,11 @@ pub const VM = struct {
         }
 
         while (true) {
-            const opcode = Opcode.init(bytes[self.pc]);
+            const opcode = InstructionOpcode.init(bytes[self.pc]);
 
             switch (opcode.op) {
-                0 => self.advance(), // nop
-                1 => { // halt
+                .Nop => self.pc += 1, // nop
+                .Halt => { // halt
                     const ecode = if (opcode.imm) {
                         return bytes[self.pc + 1];
                     } else {
@@ -154,7 +168,7 @@ pub const VM = struct {
 
                     return ecode;
                 },
-                2 => { // call
+                .Call => { // call
                     const nameLength: usize = @intCast(bytes[self.pc + 1]);
                     var name = try self.allocator.alloc(u8, nameLength);
                     defer self.allocator.free(name);
@@ -179,11 +193,11 @@ pub const VM = struct {
 
                     self.pc += 3 + nameLength + argCount;
                 },
-                3 => { // callext
+                .Callext => { // callext
                     try self.errf(QikError.ReservedOpcode, "opcode {d} is reversed and should not be used", .{opcode.op});
-                    self.advance();
+                    self.pc += 1;
                 },
-                4 => { // alloc
+                .Alloc => { // alloc
                     const ind: usize = @intCast(bytes[self.pc + 1]);
                     const amount: usize = @intCast(bytes[self.pc + 2]);
 
@@ -195,11 +209,11 @@ pub const VM = struct {
 
                     self.advance();
                 },
-                5 => { // set
+                .Set => { // set
                     try self.rset(opcode.imm, @intCast(bytes[self.pc + 1]), bytes[self.pc + 2]);
                     self.advance();
                 },
-                else => try self.errf(QikError.InvalidOpcode, "invalid opcode {d} for address {d}", .{ opcode.op, self.pc }),
+                _ => try self.errf(QikError.InvalidOpcode, "invalid opcode {d} for address {d}", .{ opcode.op, self.pc }),
             }
         }
 
